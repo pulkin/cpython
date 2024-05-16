@@ -890,7 +890,7 @@ class Differ:
         for g in first, second:
             yield from g
 
-    def _fancy_replace(self, a, alo, ahi, b, blo, bhi):
+    def _fancy_replace(self, a, alo, ahi, b, blo, bhi, _gravity=1e-6):
         r"""
         When replacing one block of lines with another, search the blocks
         for *similar* lines; the best-matching pair (if any) is used as a
@@ -918,9 +918,21 @@ class Differ:
         # search for the pair that matches best without being identical
         # (identical lines must be junk lines, & we don't want to synch up
         # on junk -- unless we have to)
+
+        # for pathological cases with many equal ratios prefer to split
+        # closer to the middle of a, b chunks such that the resulting
+        # branching is more optimal (bisect-like)
+        def _drag_to_center(i, lo, hi):
+            # any convex function with a maximum at (lo + hi - 1) / 2
+            # this one is zero at edges lo, hi - 1 and _gravity in the middle
+            return _gravity * (1 - ((2 * i - lo - hi + 1) / (hi - lo - 1)) ** 2)
+        # with the weight above, the best_ratio becomes slightly bigger
+        # which means that the real cutoff is slightly smaller than 0.75
+            
         for j in range(blo, bhi):
             bj = b[j]
             cruncher.set_seq2(bj)
+            weight_b = _drag_to_center(j, blo, bhi)
             for i in range(alo, ahi):
                 ai = a[i]
                 if ai == bj:
@@ -928,16 +940,17 @@ class Differ:
                         eqi, eqj = i, j
                     continue
                 cruncher.set_seq1(ai)
+                weight_ab = weight_b + _drag_to_center(i, alo, ahi)
                 # computing similarity is expensive, so use the quick
                 # upper bounds first -- have seen this speed up messy
                 # compares by a factor of 3.
                 # note that ratio() is only expensive to compute the first
                 # time it's called on a sequence pair; the expensive part
                 # of the computation is cached by cruncher
-                if cruncher.real_quick_ratio() > best_ratio and \
-                      cruncher.quick_ratio() > best_ratio and \
-                      cruncher.ratio() > best_ratio:
-                    best_ratio, best_i, best_j = cruncher.ratio(), i, j
+                if cruncher.real_quick_ratio() + weight_ab > best_ratio and \
+                      cruncher.quick_ratio() + weight_ab > best_ratio and \
+                      cruncher.ratio() + weight_ab > best_ratio:
+                    best_ratio, best_i, best_j = cruncher.ratio() + weight_ab, i, j
         if best_ratio < cutoff:
             # no non-identical "pretty close" pair
             if eqi is None:
